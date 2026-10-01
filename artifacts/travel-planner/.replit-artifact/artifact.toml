@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Intelligent Travel Planner"
+description = "Plan personalized trips with day-wise itineraries, travel and stay comparisons, budget-aware suggestions, and group expense tracking with split balances."
+version = "1.0.0"
+id = "artifacts/travel-planner"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24289
+
+[services.development]
+run = "pnpm --filter @workspace/travel-planner run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/travel-planner", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/travel-planner/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24289"
+BASE_PATH = "/"
