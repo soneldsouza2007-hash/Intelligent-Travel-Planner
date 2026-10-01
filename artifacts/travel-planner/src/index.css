@@ -308,6 +308,7 @@ button { cursor: pointer; }
 .panel-sub {font-size:11px;color:#88958d;margin-top:4px;}
 .trip-controls { padding:18px 19px 20px;display:grid;grid-template-columns:1.3fr .8fr .8fr 1fr;gap:12px; }
 .field { display:grid;gap:6px;min-width:0; }
+.field-help {font-size:9px;line-height:1.35;color:#87938b;}
 .field label {font:10px var(--app-font-mono);color:#78877f;text-transform:uppercase;letter-spacing:.08em;}
 .field input,.field select,.field textarea { width:100%;min-width:0;box-sizing:border-box;border:1px solid #ddd8cc;border-radius:8px;background:#fffefa;padding:9px 10px;color:#27443c;outline:none;font-size:12px;transition:border .2s,box-shadow .2s;}
 .field input:focus,.field select:focus,.field textarea:focus {border-color:#73978b;box-shadow:0 0 0 3px #73978b22;}

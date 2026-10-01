@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: travel
+    description: Destination-aware travel planning
 paths:
   /healthz:
     get:
@@ -24,6 +26,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /travel/places:
+    get:
+      operationId: searchTravelPlaces
+      tags: [travel]
+      summary: Find real places near a travel destination
+      parameters:
+        - name: destination
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+      responses:
+        "200":
+          description: Real nearby destinations and venue suggestions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TravelPlacesResult"
+        "400":
+          description: Invalid destination
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TravelPlacesError"
+        "404":
+          description: No destination or places were found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TravelPlacesError"
+        "502":
+          description: The open places data source could not be reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TravelPlacesError"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +73,90 @@ components:
           type: string
       required:
         - status
+    TravelPlace:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        area:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        distanceMeters:
+          type: number
+        durationHours:
+          type: number
+        startHour:
+          type: string
+        endHour:
+          type: string
+        estimatedCost:
+          type: number
+        costKnown:
+          type: boolean
+        priceNote:
+          type: string
+        preferenceTags:
+          type: array
+          items:
+            type: string
+        description:
+          type: string
+        venueHours:
+          type: string
+        source:
+          type: string
+      required:
+        - id
+        - name
+        - category
+        - area
+        - latitude
+        - longitude
+        - distanceMeters
+        - durationHours
+        - startHour
+        - endHour
+        - estimatedCost
+        - costKnown
+        - priceNote
+        - preferenceTags
+        - description
+        - venueHours
+        - source
+    TravelPlacesResult:
+      type: object
+      properties:
+        destination:
+          type: string
+        resolvedLocation:
+          type: string
+        source:
+          type: string
+        fetchedAt:
+          type: string
+          format: date-time
+        places:
+          type: array
+          items:
+            $ref: "#/components/schemas/TravelPlace"
+      required:
+        - destination
+        - resolvedLocation
+        - source
+        - fetchedAt
+        - places
+    TravelPlacesError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
 

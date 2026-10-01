@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
+import { useSearchTravelPlaces } from '@workspace/api-client-react';
+import type { TravelPlace } from '@workspace/api-client-react';
 import {
   Map, Compass, CalendarDays, Wallet, Plus, Sparkles, MapPin, Clock3,
   Pencil, Trash2, X, TrainFront, BedDouble, Users, SlidersHorizontal,
@@ -10,17 +12,18 @@ type Activity = {
   id: string; name: string; category: string; area: string; durationHours: number;
   startHour: string; endHour: string; estimatedCost: number; preferenceTags: string[];
   description: string; transferMins: number; venueHours: string;
+  latitude?: number; longitude?: number; costKnown?: boolean; priceNote?: string; source?: string;
 };
 type DayPlan = { day: number; date: string; activities: Activity[] };
 type Option = {
   id: string; providerName: string; category: 'transport' | 'stay'; price: number;
   duration?: string; rating?: number; location: string; sourceLabel: string; notes: string;
-  availabilityNote?: string;
+  availabilityNote?: string; destinationKey?: string;
 };
 type Traveler = { id: string; name: string };
 type Expense = {
   id: string; title: string; category: string; amount: number; paidBy: string;
-  sharedWith: string[]; date: string;
+  sharedWith: string[]; date: string; destinationKey?: string;
 };
 type Trip = {
   destination: string; durationDays: number; budgetTotal: number; currency: string;
@@ -32,6 +35,13 @@ type ModalType = 'activity' | 'option' | 'expense' | 'traveler' | null;
 const PREFS = ['Food & wine', 'History', 'Design', 'Coast', 'Local life', 'Outdoors'];
 const STORAGE_KEY = 'wayfarer-trip-v1';
 const uid = () => Math.random().toString(36).slice(2, 10);
+const destinationKey = (value: string) => value.trim().split(',')[0]?.trim().toLowerCase() ?? '';
+const legacyGenericNames = new Set([
+  'walk the old quarter',
+  'local market & coffee',
+  'art, architecture & a long lunch',
+  'park or waterfront at golden hour',
+]);
 const addDays = (date: string, n: number) => {
   const d = new Date(`${date}T12:00:00`);
   d.setDate(d.getDate() + n);
@@ -91,11 +101,31 @@ function neighborhoodTransfer(from: string, to: string, fallback = 15) {
   if ([fromZone, toZone].includes('hills') && [fromZone, toZone].includes('center')) return 16;
   return Math.max(10, fallback);
 }
+function transferBetween(from: Activity | undefined, to: Activity) {
+  if (
+    from?.latitude != null &&
+    from.longitude != null &&
+    to.latitude != null &&
+    to.longitude != null
+  ) {
+    const radians = (degrees: number) => (degrees * Math.PI) / 180;
+    const latitudeA = radians(from.latitude);
+    const latitudeB = radians(to.latitude);
+    const deltaLatitude = latitudeB - latitudeA;
+    const deltaLongitude = radians(to.longitude - from.longitude);
+    const a =
+      Math.sin(deltaLatitude / 2) ** 2 +
+      Math.cos(latitudeA) * Math.cos(latitudeB) * Math.sin(deltaLongitude / 2) ** 2;
+    const distanceKm = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Math.min(80, Math.max(8, Math.round(8 + distanceKm * 10)));
+  }
+  return from ? neighborhoodTransfer(from.area, to.area, to.transferMins) : 0;
+}
 const money = (value: number, currency = 'EUR') => new Intl.NumberFormat('en-GB', { style: 'currency', currency, maximumFractionDigits: 0 }).format(value);
 const shortDate = (date: string) => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(`${date}T12:00:00`));
 
-function buildActivity(name: string, category: string, area: string, startHour: string, endHour: string, estimatedCost: number, preferenceTags: string[], description: string, transferMins: number, venueHours: string): Activity {
-  return { id: uid(), name, category, area, startHour, endHour, durationHours: hoursBetween(startHour, endHour), estimatedCost, preferenceTags, description, transferMins, venueHours };
+function buildActivity(name: string, category: string, area: string, startHour: string, endHour: string, estimatedCost: number, preferenceTags: string[], description: string, transferMins: number, venueHours: string, extra: Partial<Activity> = {}): Activity {
+  return { id: uid(), name, category, area, startHour, endHour, durationHours: hoursBetween(startHour, endHour), estimatedCost, preferenceTags, description, transferMins, venueHours, ...extra };
 }
 const lisbonCatalog: Activity[] = [
   buildActivity('Coffee & a pastel de nata', 'Food', 'Baixa', '09:00', '10:00', 9, ['Food & wine', 'Local life'], 'Start gently at a neighborhood pastelaria before the city wakes up.', 0, 'Most cafés open from 08:00'),
@@ -119,10 +149,10 @@ const lisbonCatalog: Activity[] = [
   buildActivity('Chiado lunch & bookshops', 'Food', 'Chiado', '14:00', '15:30', 20, ['Food & wine', 'Local life'], 'Classic cafés and independent bookshops make a good final afternoon.', 8, 'Most shops open until 19:00'),
 ];
 const seedOptions: Option[] = [
-  { id: uid(), providerName: 'Metro + occasional taxi', category: 'transport', price: 34, duration: 'Local travel · 4 days', rating: 0, location: 'Lisbon city', sourceLabel: 'Planning estimate', notes: 'Allow for a reloadable transit card and a few short rides.' },
-  { id: uid(), providerName: 'Lisbon Airport transfer', category: 'transport', price: 18, duration: '25–40 min', rating: 0, location: 'LIS → Baixa', sourceLabel: 'Planning estimate', notes: 'Per group, one-way estimate. Compare with metro and taxi on the day.' },
-  { id: uid(), providerName: 'Casa do Pátio guesthouse', category: 'stay', price: 168, duration: 'per night · 2 rooms', rating: 4.7, location: 'Alfama · walkable base', sourceLabel: 'Planning estimate', notes: 'Illustrative nightly budget for a comfortable central stay; not availability.', availabilityNote: 'Not checked — illustrative entry only.' },
-  { id: uid(), providerName: 'Avenida apartment', category: 'stay', price: 205, duration: 'per night · 2 bedrooms', rating: 4.8, location: 'Avenida da Liberdade', sourceLabel: 'Planning estimate', notes: 'A roomy group-stay placeholder. Verify actual prices and occupancy independently.', availabilityNote: 'Not checked — illustrative entry only.' },
+  { id: uid(), providerName: 'Metro + occasional taxi', category: 'transport', price: 34, duration: 'Local travel · 4 days', rating: 0, location: 'Lisbon city', sourceLabel: 'Planning estimate', notes: 'Allow for a reloadable transit card and a few short rides.', destinationKey: 'lisbon' },
+  { id: uid(), providerName: 'Lisbon Airport transfer', category: 'transport', price: 18, duration: '25–40 min', rating: 0, location: 'LIS → Baixa', sourceLabel: 'Planning estimate', notes: 'Per group, one-way estimate. Compare with metro and taxi on the day.', destinationKey: 'lisbon' },
+  { id: uid(), providerName: 'Casa do Pátio guesthouse', category: 'stay', price: 168, duration: 'per night · 2 rooms', rating: 4.7, location: 'Alfama · walkable base', sourceLabel: 'Planning estimate', notes: 'Illustrative nightly budget for a comfortable central stay; not availability.', availabilityNote: 'Not checked — illustrative entry only.', destinationKey: 'lisbon' },
+  { id: uid(), providerName: 'Avenida apartment', category: 'stay', price: 205, duration: 'per night · 2 bedrooms', rating: 4.8, location: 'Avenida da Liberdade', sourceLabel: 'Planning estimate', notes: 'A roomy group-stay placeholder. Verify actual prices and occupancy independently.', availabilityNote: 'Not checked — illustrative entry only.', destinationKey: 'lisbon' },
 ];
 const seedState: AppState = {
   trip: { destination: 'Lisbon, Portugal', durationDays: 4, budgetTotal: 2200, currency: 'EUR', groupSize: 2, startDate: '2026-10-01', preferences: ['Food & wine', 'History', 'Design', 'Local life'], pace: 'Balanced' },
@@ -130,18 +160,43 @@ const seedState: AppState = {
   plans: [],
   options: seedOptions,
   expenses: [
-    { id: uid(), title: 'Apartment deposit', category: 'Stay', amount: 160, paidBy: 'trav-1', sharedWith: ['trav-1', 'trav-2'], date: '2026-10-01' },
-    { id: uid(), title: 'Museum tickets', category: 'Activities', amount: 28, paidBy: 'trav-2', sharedWith: ['trav-1', 'trav-2'], date: '2026-10-01' },
+    { id: uid(), title: 'Apartment deposit', category: 'Stay', amount: 160, paidBy: 'trav-1', sharedWith: ['trav-1', 'trav-2'], date: '2026-10-01', destinationKey: 'lisbon' },
+    { id: uid(), title: 'Museum tickets', category: 'Activities', amount: 28, paidBy: 'trav-2', sharedWith: ['trav-1', 'trav-2'], date: '2026-10-01', destinationKey: 'lisbon' },
   ],
 };
-function generatePlans(trip: Trip, current: DayPlan[] = []): DayPlan[] {
-  const isLisbon = /lisbon/i.test(trip.destination);
-  const catalog = isLisbon ? lisbonCatalog : [
-    buildActivity(`Walk the old quarter`, 'Local life', 'Historic center', '09:30', '11:00', 0, ['Local life', 'History'], `A gentle first look at ${trip.destination}'s historic streets.`, 0, 'Open public streets'),
-    buildActivity('Local market & coffee', 'Food', 'Central market', '11:30', '13:00', 18, ['Food & wine', 'Local life'], 'Try a local specialty and see what is in season.', 14, 'Check current opening times'),
-    buildActivity('Art, architecture & a long lunch', 'Design', 'Museum district', '14:30', '17:00', 24, ['Design', 'History'], 'A flexible afternoon combining one cultural stop with time to wander.', 16, 'Check venue opening times'),
-    buildActivity('Park or waterfront at golden hour', 'Outdoors', 'Riverside', '17:30', '19:00', 0, ['Outdoors', 'Coast'], 'Leave room for fresh air and a spontaneous detour.', 12, 'Open public space'),
-  ];
+function activityFromPlace(place: TravelPlace): Activity {
+  return {
+    id: place.id,
+    name: place.name,
+    category: place.category,
+    area: place.area,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    startHour: place.startHour,
+    endHour: place.endHour,
+    durationHours: place.durationHours,
+    estimatedCost: place.estimatedCost,
+    costKnown: place.costKnown,
+    priceNote: place.priceNote,
+    preferenceTags: place.preferenceTags,
+    description: place.description,
+    transferMins: 0,
+    venueHours: place.venueHours,
+    source: place.source,
+  };
+}
+function uniqueActivityNames(activities: Activity[]) {
+  const seen = new Set<string>();
+  return activities.filter(activity => {
+    const key = destinationKey(activity.name.replace(/,\s*[^,]+$/, ''));
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function generatePlans(trip: Trip, candidatePlaces?: Activity[]): DayPlan[] {
+  const catalog = candidatePlaces ?? (/lisbon/i.test(trip.destination) ? lisbonCatalog : []);
+  if (!catalog.length) return [];
   const perDay = trip.pace === 'Easy' ? 3 : trip.pace === 'Full' ? 5 : 4;
   const dayLimitMinutes = trip.pace === 'Easy' ? 300 : trip.pace === 'Full' ? 540 : 420;
   const usedNames = new Set<string>();
@@ -152,12 +207,15 @@ function generatePlans(trip: Trip, current: DayPlan[] = []): DayPlan[] {
     const scheduled: Activity[] = [];
     let elapsedMinutes = 0;
     let clock = 8 * 60;
-    let previousArea = '';
+    let previousActivity: Activity | undefined;
     while (scheduled.length < perDay) {
-      const candidates = catalog.filter(activity => !dayNames.has(activity.name.toLowerCase()));
+      const candidates = catalog.filter(activity => {
+        const key = destinationKey(activity.name.replace(/,\s*[^,]+$/, ''));
+        return !dayNames.has(key) && !usedNames.has(key);
+      });
       if (!candidates.length) break;
       const evaluate = (pool: Activity[]) => pool.map(activity => {
-        const transferMins = previousArea ? neighborhoodTransfer(previousArea, activity.area, activity.transferMins) : 0;
+        const transferMins = transferBetween(previousActivity, activity);
         const durationMins = Math.round(hoursBetween(activity.startHour, activity.endHour) * 60);
         if (!venueOpenOn(activity.venueHours, date)) return null;
         const window = venueWindow(activity.venueHours);
@@ -168,15 +226,14 @@ function generatePlans(trip: Trip, current: DayPlan[] = []): DayPlan[] {
         if (window && (start < window.open || end > window.close)) return null;
         if (end > 21 * 60 || elapsedMinutes + transferMins + durationMins > dayLimitMinutes) return null;
         const preferenceFit = activity.preferenceTags.filter(tag => trip.preferences.includes(tag)).length;
-        const sameArea = previousArea && previousArea.toLowerCase() === activity.area.toLowerCase() ? 5 : 0;
-        const sameZone = previousArea && neighborhoodTransfer(previousArea, activity.area) <= 12 ? 2 : 0;
+        const sameArea = previousActivity?.area.toLowerCase() === activity.area.toLowerCase() ? 5 : 0;
+        const sameZone = previousActivity && neighborhoodTransfer(previousActivity.area, activity.area) <= 12 ? 2 : 0;
+        const categoryVariety = scheduled.some(item => item.category === activity.category) ? -4 : 0;
         const latenessPenalty = Math.max(0, start - preferredStart) / 80;
-        const score = preferenceFit * 12 + sameArea + sameZone - latenessPenalty - durationMins / 240;
+        const score = preferenceFit * 12 + sameArea + sameZone + categoryVariety - latenessPenalty - durationMins / 240;
         return { activity, transferMins, start, end, durationMins, score };
       }).filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
-      let choices = evaluate(candidates.filter(activity => !usedNames.has(activity.name.toLowerCase())));
-      // Reuse only after exhausting eligible, not-yet-planned activities across the trip.
-      if (!choices.length) choices = evaluate(candidates.filter(activity => usedNames.has(activity.name.toLowerCase())));
+      const choices = evaluate(candidates);
       choices.sort((a, b) => b.score - a.score);
       const pick = choices[0];
       if (!pick) break;
@@ -189,11 +246,12 @@ function generatePlans(trip: Trip, current: DayPlan[] = []): DayPlan[] {
         transferMins: pick.transferMins,
       };
       scheduled.push(activity);
-      dayNames.add(activity.name.toLowerCase());
-      usedNames.add(activity.name.toLowerCase());
+      const nameKey = destinationKey(activity.name.replace(/,\s*[^,]+$/, ''));
+      dayNames.add(nameKey);
+      usedNames.add(nameKey);
       elapsedMinutes += pick.transferMins + pick.durationMins;
       clock = pick.end;
-      previousArea = activity.area;
+      previousActivity = activity;
     }
     plans.push({ day: i + 1, date, activities: scheduled });
   }
@@ -208,10 +266,26 @@ function readState(): AppState {
     const migrateSampleDate = /lisbon/i.test(savedTrip.destination) && savedTrip.startDate === '2025-06-12';
     const trip = { ...savedTrip, startDate: migrateSampleDate ? '2026-10-01' : savedTrip.startDate };
     const travelers = Array.isArray(parsed.travelers) && parsed.travelers.length ? parsed.travelers : seedState.travelers;
-    const options = Array.isArray(parsed.options) ? parsed.options : seedOptions;
-    const expenses = Array.isArray(parsed.expenses) ? parsed.expenses.map(expense => migrateSampleDate && expense.date === '2025-06-12' ? { ...expense, date: '2026-10-01' } : expense) : [];
+    const seedOptionNames = new Set(seedOptions.map(option => option.providerName.toLowerCase()));
+    const options = Array.isArray(parsed.options)
+      ? parsed.options.map(option => ({
+        ...option,
+        destinationKey: option.destinationKey ?? (seedOptionNames.has(option.providerName.toLowerCase()) ? 'lisbon' : destinationKey(trip.destination)),
+      }))
+      : seedOptions;
+    const seedExpenseTitles = new Set(seedState.expenses.map(expense => expense.title.toLowerCase()));
+    const expenses = Array.isArray(parsed.expenses)
+      ? parsed.expenses.map(expense => ({
+        ...expense,
+        date: migrateSampleDate && expense.date === '2025-06-12' ? '2026-10-01' : expense.date,
+        destinationKey: expense.destinationKey ?? (seedExpenseTitles.has(expense.title.toLowerCase()) ? 'lisbon' : destinationKey(trip.destination)),
+      }))
+      : [];
     const storedPlans = Array.isArray(parsed.plans) ? parsed.plans : [];
-    const plans = storedPlans.length
+    const containsOldGenericStops = storedPlans.some(day =>
+      day.activities?.some(activity => legacyGenericNames.has(activity.name.toLowerCase())),
+    );
+    const plans = storedPlans.length && !containsOldGenericStops
       ? storedPlans.map((day, index) => ({ ...day, date: migrateSampleDate ? addDays(trip.startDate, index) : day.date }))
       : generatePlans(trip);
     return { trip, travelers, options, expenses, plans };
@@ -233,7 +307,65 @@ function App() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [toast, setToast] = useState('');
   const [activeSection, setActiveSection] = useState('workspace');
-  const { trip, travelers, plans, options, expenses } = state;
+  const { trip, travelers, plans, options } = state;
+  const currentDestinationKey = destinationKey(trip.destination);
+  const expenses = state.expenses.filter(expense =>
+    destinationKey(expense.destinationKey ?? trip.destination) === currentDestinationKey,
+  );
+  const [debouncedDestination, setDebouncedDestination] = useState(trip.destination);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedDestination(trip.destination.trim()), 650);
+    return () => window.clearTimeout(timer);
+  }, [trip.destination]);
+  const placeQuery = useSearchTravelPlaces(
+    { destination: debouncedDestination },
+    {
+      query: {
+        enabled: debouncedDestination.trim().length >= 2,
+        retry: 1,
+        staleTime: 30 * 60 * 1000,
+      },
+    },
+  );
+  const hasCurrentPlaceResults = Boolean(
+    placeQuery.data && destinationKey(placeQuery.data.destination) === currentDestinationKey,
+  );
+  const placeCatalog = useMemo(() => {
+    if (!hasCurrentPlaceResults || !placeQuery.data) return [];
+    const destinationCatalog = /lisbon/i.test(trip.destination) ? lisbonCatalog : [];
+    return uniqueActivityNames([
+      ...destinationCatalog,
+      ...placeQuery.data.places.map(activityFromPlace),
+    ]);
+  }, [hasCurrentPlaceResults, placeQuery.data, trip.destination]);
+  const destinationLookupPending = trip.destination.trim().length >= 2 && (
+    destinationKey(debouncedDestination) !== currentDestinationKey ||
+    (!hasCurrentPlaceResults && placeQuery.isFetching)
+  );
+  const destinationLookupError = destinationKey(debouncedDestination) === currentDestinationKey &&
+    !hasCurrentPlaceResults && placeQuery.isError
+    ? (placeQuery.error instanceof Error ? placeQuery.error.message : 'Could not load nearby places.')
+    : '';
+  const currentOptions = options.filter(option =>
+    destinationKey(option.destinationKey ?? trip.destination) === currentDestinationKey,
+  );
+  const currentExpenses = expenses;
+  useEffect(() => {
+    if (!hasCurrentPlaceResults || !placeCatalog.length) return;
+    setState(old => {
+      if (destinationKey(old.trip.destination) !== currentDestinationKey) return old;
+      return { ...old, plans: generatePlans(old.trip, placeCatalog) };
+    });
+  }, [
+    currentDestinationKey,
+    hasCurrentPlaceResults,
+    placeCatalog,
+    trip.destination,
+    trip.durationDays,
+    trip.startDate,
+    trip.preferences,
+    trip.pace,
+  ]);
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { setToast('Could not save locally. Check browser storage settings.'); } }, [state]);
   useEffect(() => {
     if (!toast) return;
@@ -241,23 +373,25 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
   const tripSpend = useMemo(() => {
-    const activityEstimates = plans.flatMap(p => p.activities).reduce((sum, activity) => sum + activity.estimatedCost, 0);
-    const transportPrices = options.filter(option => option.category === 'transport').map(option => option.price);
-    const stayPrices = options.filter(option => option.category === 'stay').map(option => option.price);
+    const activityEstimates = plans.flatMap(p => p.activities).reduce((sum, activity) => sum + (activity.costKnown === false ? 0 : activity.estimatedCost), 0);
+    const transportPrices = currentOptions.filter(option => option.category === 'transport').map(option => option.price);
+    const stayPrices = currentOptions.filter(option => option.category === 'stay').map(option => option.price);
     const lowestTransportEstimate = transportPrices.length ? Math.min(...transportPrices) : 0;
     const lowestNightlyStay = stayPrices.length ? Math.min(...stayPrices) : 0;
     return activityEstimates + lowestTransportEstimate + lowestNightlyStay * Math.max(0, trip.durationDays - 1);
-  }, [plans, options, trip.durationDays]);
-  const dayActivitySpend = (day: DayPlan) => day.activities.reduce((sum, a) => sum + a.estimatedCost, 0);
+  }, [plans, currentOptions, trip.durationDays]);
+  const unpricedActivityCount = plans.flatMap(day => day.activities).filter(activity => activity.costKnown === false).length;
+  const dayActivitySpend = (day: DayPlan) => day.activities.reduce((sum, activity) => sum + (activity.costKnown === false ? 0 : activity.estimatedCost), 0);
   const costPerPerson = (expense: Expense) => expense.amount / Math.max(expense.sharedWith.length, 1);
   const balances = useMemo(() => travelers.map(person => {
-    const paid = expenses.filter(e => e.paidBy === person.id).reduce((sum, e) => sum + e.amount, 0);
-    const share = expenses.filter(e => e.sharedWith.includes(person.id)).reduce((sum, e) => sum + costPerPerson(e), 0);
+    const paid = currentExpenses.filter(e => e.paidBy === person.id).reduce((sum, e) => sum + e.amount, 0);
+    const share = currentExpenses.filter(e => e.sharedWith.includes(person.id)).reduce((sum, e) => sum + costPerPerson(e), 0);
     return { ...person, balance: paid - share };
-  }), [travelers, expenses]);
+  }), [travelers, currentExpenses]);
   const updateTrip = <K extends keyof Trip>(key: K, value: Trip[K]) => setState(old => {
     const nextTrip = { ...old.trip, [key]: value } as Trip;
-    if (key === 'durationDays') return { ...old, trip: nextTrip, plans: generatePlans(nextTrip, old.plans) };
+    if (key === 'destination' && destinationKey(String(value)) !== destinationKey(old.trip.destination)) return { ...old, trip: nextTrip, plans: [] };
+    if (key === 'durationDays' || key === 'pace' || key === 'preferences') return { ...old, trip: nextTrip, plans: generatePlans(nextTrip, placeCatalog) };
     if (key === 'startDate') return { ...old, trip: nextTrip, plans: old.plans.map((day, index) => ({ ...day, date: addDays(String(value), index) })) };
     return { ...old, trip: nextTrip };
   });
@@ -301,7 +435,7 @@ function App() {
     setEditingId(record?.id ?? null);
     if (type === 'activity' && record) {
       const activity = record as Activity;
-      setForm({ ...activity, estimatedCost: String(activity.estimatedCost), durationHours: String(activity.durationHours), transferMins: String(activity.transferMins), preferenceTags: activity.preferenceTags.join(', ') });
+      setForm({ ...activity, estimatedCost: String(activity.estimatedCost), durationHours: String(activity.durationHours), transferMins: String(activity.transferMins), preferenceTags: activity.preferenceTags.join(', '), latitude: activity.latitude == null ? '' : String(activity.latitude), longitude: activity.longitude == null ? '' : String(activity.longitude), costKnown: String(activity.costKnown !== false), priceNote: activity.priceNote ?? '', source: activity.source ?? '' });
     } else if (type === 'option' && record) {
       const option = record as Option;
       setForm({ ...option, price: String(option.price), rating: String(option.rating ?? ''), duration: option.duration ?? '', availabilityNote: option.availabilityNote ?? '' });
@@ -320,6 +454,11 @@ function App() {
         durationHours: hoursBetween(form.startHour || '10:00', form.endHour || '11:00'),
         estimatedCost: Number(form.estimatedCost) || 0, preferenceTags: (form.preferenceTags || '').split(',').map(s => s.trim()).filter(Boolean),
         description: form.description || 'A stop selected for your trip.', transferMins: Number(form.transferMins) || 0, venueHours: form.venueHours || 'Check opening hours',
+        latitude: form.latitude ? Number(form.latitude) : undefined,
+        longitude: form.longitude ? Number(form.longitude) : undefined,
+        costKnown: form.costKnown !== 'false',
+        priceNote: form.priceNote || 'User-entered planning estimate.',
+        source: form.source || 'User added',
       };
       const dayNum = Number(form.day) || 1;
       setState(old => {
@@ -343,11 +482,12 @@ function App() {
         sourceLabel: 'Planning estimate',
         notes: form.notes || 'User-entered estimate; verify independently.',
         availabilityNote: form.availabilityNote?.trim() || 'Not checked.',
+        destinationKey: destinationKey(trip.destination),
       };
       setState(old => ({ ...old, options: editingId ? old.options.map(o => o.id === editingId ? option : o) : [...old.options, option] }));
       setToast(editingId ? 'Estimate updated' : 'Estimate added');
     } else if (modal === 'expense') {
-      const expense: Expense = { id: editingId ?? uid(), title: form.title || 'Trip expense', category: form.category || 'Other', amount: Number(form.amount) || 0, paidBy: form.paidBy || travelers[0]?.id || '', sharedWith: (form.sharedWith || '').split(',').filter(Boolean), date: form.date || trip.startDate };
+      const expense: Expense = { id: editingId ?? uid(), title: form.title || 'Trip expense', category: form.category || 'Other', amount: Number(form.amount) || 0, paidBy: form.paidBy || travelers[0]?.id || '', sharedWith: (form.sharedWith || '').split(',').filter(Boolean), date: form.date || trip.startDate, destinationKey: destinationKey(trip.destination) };
       setState(old => ({ ...old, expenses: editingId ? old.expenses.map(e => e.id === editingId ? expense : e) : [...old.expenses, expense] }));
       setToast(editingId ? 'Expense updated' : 'Expense recorded');
     } else if (modal === 'traveler') {
@@ -373,7 +513,19 @@ function App() {
     setState(old => ({ ...old, expenses: old.expenses.filter(e => e.id !== id) }));
     setToast('Expense deleted');
   };
-  const regenerate = () => { setState(old => ({ ...old, plans: generatePlans(old.trip, old.plans) })); setToast('Itinerary refreshed around your trip preferences'); };
+  const regenerate = () => {
+    if (destinationKey(debouncedDestination) !== currentDestinationKey) {
+      setToast('Finish entering the destination to find its places.');
+      return;
+    }
+    if (!hasCurrentPlaceResults) {
+      void placeQuery.refetch();
+      setToast('Looking up places for this destination.');
+      return;
+    }
+    setState(old => ({ ...old, plans: generatePlans(old.trip, placeCatalog) }));
+    setToast('Itinerary refreshed from unique places for this destination.');
+  };
   const resetTrip = () => {
     if (!window.confirm('Restore the sample Lisbon trip? This replaces your saved trip.')) return;
     setState({ ...seedState, plans: generatePlans(seedState.trip) });
@@ -398,46 +550,51 @@ function App() {
       <main className="main-area">
         <header className="topbar"><div className="eyebrow">PERSONAL TRAVEL WORKSPACE <span style={{ opacity: .5 }}> / </span> {shortDate(trip.startDate).toUpperCase()}</div><div className="profile"><span>Saved locally</span><div className="avatar">{travelers[0]?.name.slice(0, 1).toUpperCase() ?? 'Y'}</div><span>{travelers[0]?.name ?? 'You'}</span></div></header>
         <section id="workspace">
-          <div className="page-head"><div><div className="eyebrow">A TRIP THAT FITS YOU</div><h1>{trip.destination.split(',')[0]}<span style={{ color: '#dc8368' }}>.</span></h1><p>Made for your pace, your people, and the places you care about.</p></div><div className="head-actions"><button className="btn" onClick={() => openModal('traveler')} data-testid="button-add-traveler"><Users size={15} /> Add traveler</button><button className="btn btn-primary" onClick={regenerate} data-testid="button-build-itinerary"><Sparkles size={15} /> Refresh my plan</button></div></div>
+          <div className="page-head"><div><div className="eyebrow">A TRIP THAT FITS YOU</div><h1>{trip.destination.split(',')[0]}<span style={{ color: '#dc8368' }}>.</span></h1><p>Made for your pace, your people, and the places you care about.</p></div><div className="head-actions"><button className="btn" onClick={() => openModal('traveler')} data-testid="button-add-traveler"><Users size={15} /> Add traveler</button><button className="btn btn-primary" onClick={regenerate} disabled={destinationLookupPending || trip.destination.trim().length < 2} data-testid="button-build-itinerary"><Sparkles size={15} /> Refresh my plan</button></div></div>
           <div className="workspace-grid">
             <div className="left-stack">
               <section className="panel" aria-label="Trip parameters" data-testid="panel-trip-settings">
                   <div className="panel-head"><div><div className="panel-title"><SlidersHorizontal size={15} />Shape this trip</div><div className="panel-sub">Refresh your plan to apply changes to your preferences and pace.</div></div><span className="eyebrow">01 / SET UP</span></div>
                 <div className="trip-controls">
-                  <div className="field"><label htmlFor="destination">Destination</label><input id="destination" value={trip.destination} onChange={e => updateTrip('destination', e.target.value)} placeholder="City, country" data-testid="input-destination" /></div>
+                  <div className="field"><label htmlFor="destination">Destination</label><input id="destination" value={trip.destination} onChange={e => updateTrip('destination', e.target.value)} placeholder="City, country" data-testid="input-destination" /><div className="field-help" aria-live="polite">{destinationLookupPending ? `Finding named places in ${trip.destination}…` : hasCurrentPlaceResults ? `Places updated for ${placeQuery.data?.resolvedLocation}.` : destinationLookupError ? 'Place lookup needs attention.' : 'Enter a city to find its places automatically.'}</div></div>
                   <div className="field"><label htmlFor="startDate">Start date</label><input id="startDate" type="date" value={trip.startDate} onChange={e => updateTrip('startDate', e.target.value)} data-testid="input-start-date" /></div>
                   <div className="field"><label htmlFor="duration">Days</label><input id="duration" type="number" min="1" max="21" value={trip.durationDays} onChange={e => updateTrip('durationDays', Math.min(21, Math.max(1, Number(e.target.value))))} data-testid="input-duration" /></div>
                   <div className="field"><label htmlFor="budget">Total budget · {trip.currency}</label><input id="budget" type="number" min="0" value={trip.budgetTotal} onChange={e => updateTrip('budgetTotal', Number(e.target.value))} data-testid="input-budget" /></div>
                   <div className="field"><label htmlFor="group">Group size</label><select id="group" value={trip.groupSize} onChange={e => changeGroupSize(Number(e.target.value))} data-testid="select-group-size">{Array.from({ length: Math.max(8, trip.groupSize) }, (_, index) => index + 1).map(n => <option key={n} value={n}>{n} {n === 1 ? 'traveler' : 'travelers'}</option>)}</select></div>
-                  <div className="field"><label htmlFor="currency">Currency</label><select id="currency" value={trip.currency} onChange={e => updateTrip('currency', e.target.value)} data-testid="select-currency">{['EUR', 'USD', 'GBP', 'CAD', 'AUD'].map(c => <option key={c}>{c}</option>)}</select></div>
+                  <div className="field"><label htmlFor="currency">Currency</label><select id="currency" value={trip.currency} onChange={e => updateTrip('currency', e.target.value)} data-testid="select-currency">{['EUR', 'USD', 'GBP', 'CAD', 'AUD', 'SGD', 'INR', 'JPY', 'CNY'].map(c => <option key={c}>{c}</option>)}</select></div>
                   <div className="field" style={{ gridColumn: 'span 2' }}><label>Day pace</label><div className="pace-wrap">{['Easy', 'Balanced', 'Full'].map(pace => <button key={pace} className={trip.pace === pace ? 'selected' : ''} onClick={() => updateTrip('pace', pace)} data-testid={`button-pace-${pace.toLowerCase()}`}>{pace}</button>)}</div></div>
                   <div className="pref-row"><span className="pref-label">More of</span>{PREFS.map(pref => <button key={pref} className={`chip ${trip.preferences.includes(pref) ? 'selected' : ''}`} onClick={() => togglePref(pref)} data-testid={`chip-preference-${pref.toLowerCase().replace(/[^a-z]+/g, '-')}`}>{trip.preferences.includes(pref) && <Check size={10} style={{ marginRight: 4, verticalAlign: -1 }} />}{pref}</button>)}</div>
                 </div>
                 <div className="budget-strip"><div className="budget-meta">EST. TRIP TOTAL</div><div className="budget-track"><div className="budget-fill" style={{ width: `${Math.min(100, tripSpend / Math.max(trip.budgetTotal, 1) * 100)}%` }} /></div><div className="budget-meta">{money(tripSpend, trip.currency)} / {money(trip.budgetTotal, trip.currency)}</div></div>
+                {unpricedActivityCount > 0 && <div style={{ padding: '7px 19px', color: '#98714f', fontSize: 10 }}>{unpricedActivityCount} place {unpricedActivityCount === 1 ? 'price is' : 'prices are'} not verified and excluded from this budget estimate.</div>}
               </section>
               <section className="panel" id="itinerary" data-testid="section-itinerary">
-                <div className="panel-head"><div><div className="panel-title"><CalendarDays size={15} />Your day-by-day plan</div><div className="panel-sub">A sensible route, with breathing room built in.</div></div><div style={{ display: 'flex', gap: 6 }}><button className="btn btn-quiet" onClick={regenerate} title="Rebuild itinerary" data-testid="button-regenerate-plan"><RotateCcw size={15} /></button><button className="btn btn-primary" onClick={() => openModal('activity')} data-testid="button-add-activity"><Plus size={14} /> Add a stop</button></div></div>
-                <div style={{ padding: '10px 19px 2px', display: 'flex', gap: 7, flexWrap: 'wrap' }}><span className="tag"><RouteIcon size={10} style={{ verticalAlign: -2, marginRight: 3 }} />Heuristic route suggestions</span><span className="tag"><Clock3 size={10} style={{ verticalAlign: -2, marginRight: 3 }} />Venue hours considered when known</span><span className="tag"><Sparkles size={10} style={{ verticalAlign: -2, marginRight: 3 }} />Preference fit: {trip.preferences.length ? trip.preferences.join(' · ') : 'open exploration'}</span><span className="tag">{trip.pace} pace</span></div>
-                {plans.length === 0 ? <div className="side-card"><div className="side-card-title">A fresh page</div><div className="side-card-sub">Choose trip details and refresh your plan to sketch the first route.</div><button className="btn btn-primary" onClick={regenerate} data-testid="button-generate-empty">Generate an itinerary</button></div> : plans.map(day => <div className="itinerary-day" key={day.day} data-testid={`day-plan-${day.day}`}>
+                <div className="panel-head"><div><div className="panel-title"><CalendarDays size={15} />Your day-by-day plan</div><div className="panel-sub">Unique local places, arranged around your pace and preferences.</div></div><div style={{ display: 'flex', gap: 6 }}><button className="btn btn-quiet" onClick={regenerate} title="Rebuild itinerary" disabled={destinationLookupPending || trip.destination.trim().length < 2} data-testid="button-regenerate-plan"><RotateCcw size={15} /></button><button className="btn btn-primary" onClick={() => openModal('activity')} disabled={!plans.length} data-testid="button-add-activity"><Plus size={14} /> Add a stop</button></div></div>
+                <div style={{ padding: '10px 19px 2px', display: 'flex', gap: 7, flexWrap: 'wrap' }}><span className="tag"><RouteIcon size={10} style={{ verticalAlign: -2, marginRight: 3 }} />Open-data place suggestions</span><span className="tag"><Clock3 size={10} style={{ verticalAlign: -2, marginRight: 3 }} />Verify venue hours before visiting</span><span className="tag"><Sparkles size={10} style={{ verticalAlign: -2, marginRight: 3 }} />Preference fit: {trip.preferences.length ? trip.preferences.join(' · ') : 'open exploration'}</span><span className="tag">{trip.pace} pace</span>{hasCurrentPlaceResults && <span className="tag">{placeCatalog.length} unique places found</span>}</div>
+                {destinationLookupError && <div role="alert" className="side-card" style={{ margin: '12px 19px', borderColor: '#d9aa92' }}><div className="side-card-title">Couldn’t find places for this destination</div><div className="side-card-sub">{destinationLookupError}</div><button className="btn" onClick={() => void placeQuery.refetch()} disabled={placeQuery.isFetching}>Retry place lookup</button></div>}
+                {destinationLookupPending && <div className="side-card" role="status" style={{ margin: '12px 19px' }}><div className="side-card-title">Finding places for {trip.destination}</div><div className="side-card-sub">The old itinerary is hidden while this destination loads.</div></div>}
+                {hasCurrentPlaceResults && placeCatalog.length < trip.durationDays * (trip.pace === 'Easy' ? 3 : trip.pace === 'Full' ? 5 : 4) && <div className="side-card" style={{ margin: '12px 19px' }}><div className="side-card-sub">Only {placeCatalog.length} unique places were found. The plan leaves days open instead of repeating stops.</div></div>}
+                {plans.length === 0 ? !destinationLookupPending && !destinationLookupError && <div className="side-card"><div className="side-card-title">{hasCurrentPlaceResults ? 'No itinerary stops fit this pace' : 'Waiting for destination places'}</div><div className="side-card-sub">{hasCurrentPlaceResults ? 'Try a longer trip or a lighter pace to use more of the unique places found.' : 'Enter a city and its named places will load automatically.'}</div>{!hasCurrentPlaceResults && <button className="btn btn-primary" onClick={regenerate} disabled={trip.destination.trim().length < 2} data-testid="button-generate-empty">Find places</button>}</div> : plans.map(day => <div className="itinerary-day" key={day.day} data-testid={`day-plan-${day.day}`}>
                   <div className="day-header"><div className="day-number"><strong>Day {day.day}</strong><span>{shortDate(day.date)}</span></div><div className="day-totals"><span>{day.activities.length} stops</span><span>{money(dayActivitySpend(day), trip.currency)} est.</span></div></div>
                   {day.activities.length ? day.activities.map((activity, index) => <div key={activity.id}>
                     {index > 0 && <div className="transfer"><RouteIcon size={10} style={{ verticalAlign: -2 }} /> {activity.transferMins ? `~${activity.transferMins} min neighborhood transfer estimate` : 'Nearby · easy walk'}</div>}
                     <div className="activity-row" data-testid={`activity-${activity.id}`}>
                       <div className="activity-time">{timeLabel(activity.startHour)}<br /><span style={{ color: '#a5aaa0' }}>{timeLabel(activity.endHour)}</span></div><div className="timeline-dot" />
-                      <div><div className="activity-name">{activity.name}</div><div className="activity-meta"><span><MapPin size={10} style={{ verticalAlign: -2 }} /> {activity.area}</span><span>{activity.durationHours}h</span><span className="tag">{activity.category}</span></div><div className="activity-desc">{activity.description}</div><div className="activity-meta" style={{ marginTop: 7 }}><span><Clock3 size={10} style={{ verticalAlign: -2 }} /> {activity.venueHours}</span><span style={{ color: '#ad7f5d' }}>Fit: {activity.preferenceTags.filter(t => trip.preferences.includes(t)).length ? activity.preferenceTags.filter(t => trip.preferences.includes(t)).join(', ') : 'explore'}</span></div></div>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}><span className="activity-cost">{money(activity.estimatedCost, trip.currency)}</span><div className="activity-actions"><button className="btn btn-quiet" aria-label="Edit activity" onClick={() => openModal('activity', activity)} data-testid={`button-edit-activity-${activity.id}`}><Pencil size={13} /></button><button className="btn btn-quiet btn-danger" aria-label="Remove activity" onClick={() => removeActivity(activity.id)} data-testid={`button-delete-activity-${activity.id}`}><Trash2 size={13} /></button></div></div>
+                      <div><div className="activity-name">{activity.name}</div><div className="activity-meta"><span><MapPin size={10} style={{ verticalAlign: -2 }} /> {activity.area}</span><span>{activity.durationHours}h</span><span className="tag">{activity.category}</span></div><div className="activity-desc">{activity.description}</div><div className="activity-meta" style={{ marginTop: 7 }}><span><Clock3 size={10} style={{ verticalAlign: -2 }} /> {activity.venueHours}</span><span style={{ color: '#ad7f5d' }}>Fit: {activity.preferenceTags.filter(t => trip.preferences.includes(t)).length ? activity.preferenceTags.filter(t => trip.preferences.includes(t)).join(', ') : 'explore'}</span>{activity.costKnown === false && <span>{activity.priceNote || 'Current price not verified; excluded from the budget total.'}</span>}</div></div>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}><span className="activity-cost">{activity.costKnown === false ? 'Check price' : money(activity.estimatedCost, trip.currency)}</span><div className="activity-actions"><button className="btn btn-quiet" aria-label="Edit activity" onClick={() => openModal('activity', activity)} data-testid={`button-edit-activity-${activity.id}`}><Pencil size={13} /></button><button className="btn btn-quiet btn-danger" aria-label="Remove activity" onClick={() => removeActivity(activity.id)} data-testid={`button-delete-activity-${activity.id}`}><Trash2 size={13} /></button></div></div>
                     </div>
                   </div>) : <div style={{ padding: '15px 0', color: '#839189', fontSize: 11 }}>No stops yet. Add one that makes this day yours.</div>}
                   <button className="btn btn-quiet" style={{ marginLeft: 68, marginBottom: 8 }} onClick={() => { openModal('activity'); setForm(old => ({ ...old, day: String(day.day) })); }} data-testid={`button-add-activity-day-${day.day}`}><Plus size={12} /> Add to day {day.day}</button>
                 </div>)}
-                <div style={{ padding: '4px 19px 16px', fontSize: 9, color: '#9b9d91', lineHeight: 1.45 }}>This itinerary is a heuristic suggestion based on preference fit, activity durations, approximate neighborhood transfers, pacing, and recorded venue-hour notes. Always verify opening hours and transit times locally before you go.</div>
+                <div style={{ padding: '4px 19px 16px', fontSize: 9, color: '#9b9d91', lineHeight: 1.45 }}>Routes use approximate distances and unique places from Wikimedia geosearch, geocoded with Photon/OpenStreetMap. Hours, access, and costs are not live; verify them with each venue before visiting.</div>
               </section>
             </div>
             <aside className="right-stack">
               <section className="panel side-card" id="comparisons" data-testid="section-comparisons">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}><div><h2 className="side-card-title">Getting there & staying</h2><p className="side-card-sub">Compare the shape of your trip costs.</p></div><button className="btn btn-quiet" onClick={() => openModal('option')} data-testid="button-add-option" title="Add estimate"><Plus size={16} /></button></div>
                 <div className="estimate-notice"><strong>Planning estimates only.</strong> These are editable placeholders, not live availability, quotes, or bookings. Verify prices directly before you commit.</div>
-                {categories.map(category => <div key={category}><div className="eyebrow" style={{ margin: '13px 0 2px' }}>{category === 'transport' ? 'TRANSPORT' : 'ACCOMMODATION'} · {category === 'stay' ? 'PER NIGHT' : 'ESTIMATES'} · LOWEST PRICE FIRST</div>{options.filter(o => o.category === category).sort((a, b) => a.price - b.price).map(option => <div className="option" key={option.id} data-testid={`option-${option.id}`}><div><div className="option-name">{category === 'transport' ? <TrainFront size={12} style={{ verticalAlign: -2, marginRight: 4 }} /> : <BedDouble size={12} style={{ verticalAlign: -2, marginRight: 4 }} />}{option.providerName}</div><div className="option-sub">{option.location}</div><div className="option-sub">User note / unverified · rating {option.rating == null || option.rating <= 0 ? 'not entered' : `${option.rating.toFixed(1)} / 5`}</div><div className="option-sub">Availability-check note / unverified · {option.availabilityNote || 'Not checked.'}</div><div className="option-sub">{option.duration} · {option.notes}</div><div className="option-foot"><span className="tag">{option.sourceLabel}</span><span className="activity-actions"><button className="btn btn-quiet" onClick={() => openModal('option', option)} aria-label="Edit estimate" data-testid={`button-edit-option-${option.id}`}><Pencil size={12} /></button><button className="btn btn-quiet btn-danger" onClick={() => deleteOption(option.id)} aria-label="Delete estimate" data-testid={`button-delete-option-${option.id}`}><Trash2 size={12} /></button></span></div></div><div className="option-price">{money(option.price, trip.currency)}<div className="option-sub">{category === 'stay' ? 'night' : 'est.'}</div></div></div>)}</div>)}
+                {currentOptions.length === 0 && <div className="side-card-sub" style={{ padding: '12px 0' }}>No transport or stay estimates are saved for {trip.destination}. Add your own when you have a price to compare.</div>}
+                {categories.map(category => <div key={category}><div className="eyebrow" style={{ margin: '13px 0 2px' }}>{category === 'transport' ? 'TRANSPORT' : 'ACCOMMODATION'} · {category === 'stay' ? 'PER NIGHT' : 'ESTIMATES'} · LOWEST PRICE FIRST</div>{currentOptions.filter(o => o.category === category).sort((a, b) => a.price - b.price).map(option => <div className="option" key={option.id} data-testid={`option-${option.id}`}><div><div className="option-name">{category === 'transport' ? <TrainFront size={12} style={{ verticalAlign: -2, marginRight: 4 }} /> : <BedDouble size={12} style={{ verticalAlign: -2, marginRight: 4 }} />}{option.providerName}</div><div className="option-sub">{option.location}</div><div className="option-sub">User note / unverified · rating {option.rating == null || option.rating <= 0 ? 'not entered' : `${option.rating.toFixed(1)} / 5`}</div><div className="option-sub">Availability-check note / unverified · {option.availabilityNote || 'Not checked.'}</div><div className="option-sub">{option.duration} · {option.notes}</div><div className="option-foot"><span className="tag">{option.sourceLabel}</span><span className="activity-actions"><button className="btn btn-quiet" onClick={() => openModal('option', option)} aria-label="Edit estimate" data-testid={`button-edit-option-${option.id}`}><Pencil size={12} /></button><button className="btn btn-quiet btn-danger" onClick={() => deleteOption(option.id)} aria-label="Delete estimate" data-testid={`button-delete-option-${option.id}`}><Trash2 size={12} /></button></span></div></div><div className="option-price">{money(option.price, trip.currency)}<div className="option-sub">{category === 'stay' ? 'night' : 'est.'}</div></div></div>)}</div>)}
               </section>
               <section className="panel side-card" id="expenses" data-testid="section-expenses">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}><div><h2 className="side-card-title">Shared tab</h2><p className="side-card-sub">Keep the group spend clear and easy.</p></div><button className="btn btn-quiet" onClick={() => openModal('expense')} data-testid="button-add-expense" title="Add expense"><Plus size={16} /></button></div>
@@ -457,11 +614,12 @@ function App() {
         <div className="modal-body">
           {modal === 'activity' && <div className="form-grid">
             <div className="field wide"><label>Activity name</label><input value={form.name ?? ''} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Riverside market" data-testid="input-activity-name" /></div>
-            <div className="field"><label>Category</label><select value={form.category ?? 'Food'} onChange={e => setForm({ ...form, category: e.target.value })} data-testid="select-activity-category">{['Food', 'History', 'Design', 'Outdoors', 'Coast', 'Local life', 'Culture', 'Rest'].map(c => <option key={c}>{c}</option>)}</select></div>
+            <div className="field"><label>Category</label><select value={form.category ?? 'Food'} onChange={e => setForm({ ...form, category: e.target.value })} data-testid="select-activity-category">{['Food', 'Neighborhood', 'Shopping', 'Attraction', 'History', 'Design', 'Outdoors', 'Coast', 'Local life', 'Culture', 'Rest'].map(c => <option key={c}>{c}</option>)}</select></div>
             <div className="field"><label>Area</label><input value={form.area ?? ''} onChange={e => setForm({ ...form, area: e.target.value })} placeholder="Neighborhood" data-testid="input-activity-area" /></div>
             <div className="field"><label>Start</label><input type="time" value={form.startHour ?? '10:00'} onChange={e => setForm({ ...form, startHour: e.target.value })} data-testid="input-activity-start" /></div>
             <div className="field"><label>End</label><input type="time" value={form.endHour ?? '11:30'} onChange={e => setForm({ ...form, endHour: e.target.value })} data-testid="input-activity-end" /></div>
             <div className="field"><label>Estimated cost · {trip.currency}</label><input type="number" min="0" value={form.estimatedCost ?? '0'} onChange={e => setForm({ ...form, estimatedCost: e.target.value })} data-testid="input-activity-cost" /></div>
+            <div className="field"><label>Budget status</label><select value={form.costKnown === false || form.costKnown === 'false' ? 'false' : 'true'} onChange={e => setForm({ ...form, costKnown: e.target.value })} data-testid="select-activity-cost-status"><option value="true">Include this estimate</option><option value="false">Price to verify</option></select></div>
             <div className="field"><label>Day</label><select value={form.day ?? '1'} onChange={e => setForm({ ...form, day: e.target.value })} data-testid="select-activity-day">{plans.map(d => <option key={d.day} value={d.day}>Day {d.day}</option>)}</select></div>
             <div className="field wide"><label>Interest tags · comma separated</label><input value={form.preferenceTags ?? ''} onChange={e => setForm({ ...form, preferenceTags: e.target.value })} placeholder="Food & wine, Local life" data-testid="input-activity-tags" /></div>
             <div className="field wide"><label>Why it fits / notes</label><textarea rows={2} value={form.description ?? ''} onChange={e => setForm({ ...form, description: e.target.value })} data-testid="input-activity-description" /></div>
