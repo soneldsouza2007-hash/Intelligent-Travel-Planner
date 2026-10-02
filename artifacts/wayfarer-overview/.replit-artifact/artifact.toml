@@ -1,0 +1,29 @@
+kind = "video"
+videoAspectRatio = "16:9"
+previewPath = "/wayfarer-overview/"
+title = "Wayfarer — Travel, Considered"
+description = "An animated product overview of Wayfarer, showing city-specific place discovery, unique day-by-day itineraries, transparent budget notes, and shared group spend."
+version = "1.0.0"
+id = "artifacts/wayfarer-overview"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/wayfarer-overview/" ]
+localPort = 20341
+
+[services.development]
+run = "pnpm --filter @workspace/wayfarer-overview run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/wayfarer-overview", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/wayfarer-overview/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20341"
+BASE_PATH = "/wayfarer-overview/"
