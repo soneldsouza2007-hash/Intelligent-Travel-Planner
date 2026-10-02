@@ -16,19 +16,19 @@ export function Scene5() {
         className="s5-orbit"
         initial={{ scale: 0.72, opacity: 0, rotate: -18 }}
         animate={{ scale: 1, opacity: 1, rotate: 0 }}
-        transition={{ duration: 0.85, delay: 0.18, ease: FILM_EASE }}
+        transition={{ duration: 0.85, delay: 0.08, ease: FILM_EASE }}
         aria-hidden="true"
       />
       <motion.div
         className="s5-lockup"
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: 0.38, ease: FILM_EASE }}
+        transition={{ duration: 0.4, delay: 0.12, ease: FILM_EASE }}
       >
         <motion.div
           initial={{ scale: 0.82, rotate: -8 }}
           animate={{ scale: 1, rotate: 0 }}
-          transition={{ duration: 0.64, delay: 0.45, ease: FILM_EASE }}
+          transition={{ duration: 0.42, delay: 0.1, ease: FILM_EASE }}
         >
           <MapMark />
         </motion.div>
@@ -36,7 +36,7 @@ export function Scene5() {
           className="s5-wordmark"
           initial={{ opacity: 0, letterSpacing: '-0.025em' }}
           animate={{ opacity: 1, letterSpacing: '-0.07em' }}
-          transition={{ duration: 0.62, delay: 0.88, ease: FILM_EASE }}
+          transition={{ duration: 0.5, delay: 0.45, ease: FILM_EASE }}
         >
           wayfarer
         </motion.h2>
@@ -44,7 +44,7 @@ export function Scene5() {
           className="s5-tagline"
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, delay: 1.5, ease: FILM_EASE }}
+          transition={{ duration: 0.4, delay: 1.35, ease: FILM_EASE }}
         >
           travel, considered
         </motion.p>
@@ -52,7 +52,7 @@ export function Scene5() {
           className="s5-promise"
           initial={{ opacity: 0, clipPath: 'inset(0 50% 0 50%)' }}
           animate={{ opacity: 1, clipPath: 'inset(0 0% 0 0%)' }}
-          transition={{ duration: 0.58, delay: 2.42, ease: FILM_EASE }}
+          transition={{ duration: 0.58, delay: 1.92, ease: FILM_EASE }}
         >
           A city-specific plan. A clearer view of spend.
         </motion.p>

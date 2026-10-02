@@ -13,10 +13,10 @@ export function Scene3() {
   return (
     <motion.section
       className="film-scene s3"
-      initial={{ opacity: 0, scale: 0.96, rotate: -1.2 }}
+      initial={{ opacity: 0.52, scale: 0.96, rotate: -1.2 }}
       animate={{ opacity: 1, scale: 1, rotate: 0 }}
       exit={{ opacity: 0, scale: 1.07, rotate: 1.2 }}
-      transition={{ duration: 0.58, ease: FILM_EASE }}
+      transition={{ duration: 0.48, ease: FILM_EASE }}
     >
       <div className="s3-topline">
         <span>Wayfarer / Itinerary</span>
@@ -25,9 +25,9 @@ export function Scene3() {
 
       <motion.h2
         className="s3-title"
-        initial={{ opacity: 0, clipPath: 'inset(0 0 100% 0)' }}
-        animate={{ opacity: 1, clipPath: 'inset(0 0 0% 0)' }}
-        transition={{ duration: 0.58, delay: 0.16, ease: FILM_EASE }}
+        initial={{ opacity: 0.45, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.34, delay: 0.03, ease: FILM_EASE }}
       >
         The itinerary
         <br />
