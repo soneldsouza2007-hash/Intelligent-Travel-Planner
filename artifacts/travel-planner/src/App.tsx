@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
-import { useSearchTravelPlaces } from '@workspace/api-client-react';
+import { getSearchTravelPlacesQueryKey, useSearchTravelPlaces } from '@workspace/api-client-react';
 import type { TravelPlace } from '@workspace/api-client-react';
 import {
   Map, Compass, CalendarDays, Wallet, Plus, Sparkles, MapPin, Clock3,
@@ -321,6 +321,7 @@ function App() {
     { destination: debouncedDestination },
     {
       query: {
+        queryKey: getSearchTravelPlacesQueryKey({ destination: debouncedDestination }),
         enabled: debouncedDestination.trim().length >= 2,
         retry: 1,
         staleTime: 30 * 60 * 1000,
@@ -619,7 +620,7 @@ function App() {
             <div className="field"><label>Start</label><input type="time" value={form.startHour ?? '10:00'} onChange={e => setForm({ ...form, startHour: e.target.value })} data-testid="input-activity-start" /></div>
             <div className="field"><label>End</label><input type="time" value={form.endHour ?? '11:30'} onChange={e => setForm({ ...form, endHour: e.target.value })} data-testid="input-activity-end" /></div>
             <div className="field"><label>Estimated cost · {trip.currency}</label><input type="number" min="0" value={form.estimatedCost ?? '0'} onChange={e => setForm({ ...form, estimatedCost: e.target.value })} data-testid="input-activity-cost" /></div>
-            <div className="field"><label>Budget status</label><select value={form.costKnown === false || form.costKnown === 'false' ? 'false' : 'true'} onChange={e => setForm({ ...form, costKnown: e.target.value })} data-testid="select-activity-cost-status"><option value="true">Include this estimate</option><option value="false">Price to verify</option></select></div>
+            <div className="field"><label>Budget status</label><select value={form.costKnown === 'false' ? 'false' : 'true'} onChange={e => setForm({ ...form, costKnown: e.target.value })} data-testid="select-activity-cost-status"><option value="true">Include this estimate</option><option value="false">Price to verify</option></select></div>
             <div className="field"><label>Day</label><select value={form.day ?? '1'} onChange={e => setForm({ ...form, day: e.target.value })} data-testid="select-activity-day">{plans.map(d => <option key={d.day} value={d.day}>Day {d.day}</option>)}</select></div>
             <div className="field wide"><label>Interest tags · comma separated</label><input value={form.preferenceTags ?? ''} onChange={e => setForm({ ...form, preferenceTags: e.target.value })} placeholder="Food & wine, Local life" data-testid="input-activity-tags" /></div>
             <div className="field wide"><label>Why it fits / notes</label><textarea rows={2} value={form.description ?? ''} onChange={e => setForm({ ...form, description: e.target.value })} data-testid="input-activity-description" /></div>
